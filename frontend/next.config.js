@@ -16,6 +16,7 @@ const withNextra = nextra({});
 
 /** @type {import("next").NextConfig} */
 const config = {
+  transpilePackages: ["recharts"],
   output:
     process.env.NEXT_CONFIG_BUILD_OUTPUT === "standalone"
       ? "standalone"
@@ -25,6 +26,7 @@ const config = {
     defaultLocale: "en",
   },
   devIndicators: false,
+  allowedDevOrigins: ["192.168.178.121", "192.168.178.121:2026", "localhost:2026"],
   async rewrites() {
     const rewrites = [];
     const gatewayURL = getInternalServiceURL(

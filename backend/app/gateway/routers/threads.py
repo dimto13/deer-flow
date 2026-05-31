@@ -310,13 +310,13 @@ async def create_thread(body: ThreadCreateRequest, request: Request) -> ThreadRe
 
 @router.post("/search", response_model=list[ThreadResponse])
 async def search_threads(body: ThreadSearchRequest, request: Request) -> list[ThreadResponse]:
-    """Search and list threads.
-
-    Delegates to the configured ThreadMetaStore implementation
-    (SQL-backed for sqlite/postgres, Store-backed for memory mode).
-    """
+    """Search and list threads."""
     from app.gateway.deps import get_thread_store
     from deerflow.persistence.thread_meta import InvalidMetadataFilterError
+    from deerflow.runtime.user_context import get_current_user
+
+    user = get_current_user()
+    logger.info("search_threads called. user: %s, body: %s", user.id if user else "None", body)
 
     repo = get_thread_store(request)
     try:
@@ -326,15 +326,37 @@ async def search_threads(body: ThreadSearchRequest, request: Request) -> list[Th
             limit=body.limit,
             offset=body.offset,
         )
+        logger.info("repo.search returned %d rows", len(rows))
     except InvalidMetadataFilterError as exc:
+        logger.warning("InvalidMetadataFilterError in search_threads: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error in search_threads")
+        raise
     return [
         ThreadResponse(
             thread_id=r["thread_id"],
             status=r.get("status", "idle"),
-            # ``coerce_iso`` heals legacy unix-second values that
-            # ``MemoryThreadMetaStore`` historically wrote with ``time.time()``;
-            # SQL-backed rows already arrive as ISO strings and pass through.
+            created_at=coerce_iso(r.get("created_at", "")),
+            updated_at=coerce_iso(r.get("updated_at", "")),
+            metadata=r.get("metadata", {}),
+            values={"title": r["display_name"]} if r.get("display_name") else {},
+            interrupts={},
+        )
+        for r in rows
+    ]
+
+
+@router.get("/all", response_model=list[ThreadResponse])
+async def get_all_threads_insecure(request: Request) -> list[ThreadResponse]:
+    """Insecure endpoint for monitoring all threads. FOR DEBUGGING ONLY."""
+    from app.gateway.deps import get_thread_store
+    repo = get_thread_store(request)
+    rows = await repo.search(user_id=None, limit=100)
+    return [
+        ThreadResponse(
+            thread_id=r["thread_id"],
+            status=r.get("status", "idle"),
             created_at=coerce_iso(r.get("created_at", "")),
             updated_at=coerce_iso(r.get("updated_at", "")),
             metadata=r.get("metadata", {}),
@@ -587,7 +609,9 @@ async def get_thread_history(thread_id: str, body: ThreadHistoryRequest, request
     """
     checkpointer = get_checkpointer(request)
 
-    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    config: dict[str, Any] = {
+        "configurable": {"thread_id": thread_id, "checkpoint_ns": ""}
+    }
     if body.before:
         config["configurable"]["checkpoint_id"] = body.before
 
